@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+/*
 package org.apache.spark.mllib.api.python
 
 import java.io.OutputStream
@@ -33,7 +33,7 @@ import org.apache.spark.mllib.classification._
 import org.apache.spark.mllib.clustering._
 import org.apache.spark.mllib.evaluation.RankingMetrics
 import org.apache.spark.mllib.feature._
-import org.apache.spark.mllib.fpm.{CSP, FPGrowth, FPGrowthModel}
+import org.apache.spark.mllib.fpm.{FPGrowth, FPGrowthModel, PrefixSpan}
 import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.linalg.distributed._
 import org.apache.spark.mllib.optimization._
@@ -578,19 +578,19 @@ private[python] class PythonMLLibAPI extends Serializable {
    * needs to be taken in the Python code to ensure it gets freed on exit; see
    * the Py4J documentation.
    */
-  def trainCSPModel(
+  def trainPrefixSpanModel(
       data: JavaRDD[java.util.ArrayList[java.util.ArrayList[Any]]],
       minSupport: Double,
       maxPatternLength: Int,
-      localProjDBSize: Int ): CSPModelWrapper = {
-    val csp = new CSP()
+      localProjDBSize: Int ): PrefixSpanModelWrapper = {
+    val prefixSpan = new PrefixSpan()
       .setMinSupport(minSupport)
       .setMaxPatternLength(maxPatternLength)
       .setMaxLocalProjDBSize(localProjDBSize)
 
     val trainData = data.rdd.map(_.asScala.toArray.map(_.asScala.toArray))
-    val model = csp.run(trainData)
-    new CSPModelWrapper(model)
+    val model = prefixSpan.run(trainData)
+    new PrefixSpanModelWrapper(model)
   }
 
   /**
@@ -1603,3 +1603,4 @@ private[spark] object SerDe extends SerDeBase with Serializable {
   // will not called in Executor automatically
   initialize()
 }
+*/

@@ -14,14 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.ml.fpm
 
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.ml.util.Instrumentation.instrumented
-import org.apache.spark.mllib.fpm.{PrefixSpan => mllibPrefixSpan}
+import org.apache.spark.mllib.fpm.{CSP => mllibCSP}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.{ArrayType, LongType, StructField, StructType}
@@ -38,10 +38,10 @@ import org.apache.spark.sql.types.{ArrayType, LongType, StructField, StructType}
  * (Wikipedia)</a>
  */
 @Since("2.4.0")
-final class PrefixSpan(@Since("2.4.0") override val uid: String) extends Params {
+final class CSP(@Since("2.4.0") override val uid: String) extends Params {
 
   @Since("2.4.0")
-  def this() = this(Identifiable.randomUID("prefixSpan"))
+  def this() = this(Identifiable.randomUID("CSP"))
 
   /**
    * Param for the minimal support level (default: `0.1`).
@@ -148,12 +148,12 @@ final class PrefixSpan(@Since("2.4.0") override val uid: String) extends Params 
     val sequences = data.where(col(sequenceColParam).isNotNull).rdd
       .map(r => r.getSeq[scala.collection.Seq[Any]](0).map(_.toArray).toArray)
 
-    val mllibPrefixSpan = new mllibPrefixSpan()
+    val mllibCSP = new mllibCSP()
       .setMinSupport($(minSupport))
       .setMaxPatternLength($(maxPatternLength))
       .setMaxLocalProjDBSize($(maxLocalProjDBSize))
 
-    val rows = mllibPrefixSpan.run(sequences).freqSequences.map(f => Row(f.sequence, f.freq))
+    val rows = mllibCSP.run(sequences).freqSequences.map(f => Row(f.sequence, f.freq))
     val schema = StructType(Seq(
       StructField("sequence", dataset.schema(sequenceColParam).dataType, nullable = false),
       StructField("freq", LongType, nullable = false)))
@@ -163,7 +163,6 @@ final class PrefixSpan(@Since("2.4.0") override val uid: String) extends Params 
   }
 
   @Since("2.4.0")
-  override def copy(extra: ParamMap): PrefixSpan = defaultCopy(extra)
+  override def copy(extra: ParamMap): CSP = defaultCopy(extra)
 
 }
-*/

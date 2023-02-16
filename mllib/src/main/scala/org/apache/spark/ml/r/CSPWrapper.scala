@@ -14,22 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.ml.r
 
-import org.apache.spark.ml.fpm.PrefixSpan
+import org.apache.spark.ml.fpm.CSP
 
-private[r] object PrefixSpanWrapper {
-  def getPrefixSpan(
+private[r] object CSPWrapper {
+  def getCSP(
       minSupport: Double,
       maxPatternLength: Int,
       maxLocalProjDBSize: Double,
-      sequenceCol: String): PrefixSpan = {
-    new PrefixSpan()
+      sequenceCol: String): CSP = {
+    new CSP()
       .setMinSupport(minSupport)
       .setMaxPatternLength(maxPatternLength)
       .setMaxLocalProjDBSize(maxLocalProjDBSize.toLong)
       .setSequenceCol(sequenceCol)
   }
 }
-*/

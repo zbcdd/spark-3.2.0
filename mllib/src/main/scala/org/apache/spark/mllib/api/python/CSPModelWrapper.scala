@@ -14,22 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
-package org.apache.spark.ml.r
 
-import org.apache.spark.ml.fpm.PrefixSpan
+package org.apache.spark.mllib.api.python
 
-private[r] object PrefixSpanWrapper {
-  def getPrefixSpan(
-      minSupport: Double,
-      maxPatternLength: Int,
-      maxLocalProjDBSize: Double,
-      sequenceCol: String): PrefixSpan = {
-    new PrefixSpan()
-      .setMinSupport(minSupport)
-      .setMaxPatternLength(maxPatternLength)
-      .setMaxLocalProjDBSize(maxLocalProjDBSize.toLong)
-      .setSequenceCol(sequenceCol)
+import org.apache.spark.mllib.fpm.CSPModel
+import org.apache.spark.rdd.RDD
+
+/**
+ * A Wrapper of PrefixSpanModel to provide helper method for Python
+ */
+private[python] class CSPModelWrapper(model: CSPModel[Any])
+  extends CSPModel(model.freqSequences) {
+
+  def getFreqSequences: RDD[Array[Any]] = {
+    SerDe.fromTuple2RDD(model.freqSequences.map(x => (x.javaSequence, x.freq)))
   }
 }
-*/

@@ -27,11 +27,11 @@ import org.apache.spark.internal.Logging
  * @param minCount minimal count for a frequent pattern
  * @param maxPatternLength max pattern length for a frequent pattern
  */
-private[fpm] class LocalPrefixSpan(
+private[fpm] class LocalCSP(
     val minCount: Long,
     val maxPatternLength: Int) extends Logging with Serializable {
-  import PrefixSpan.Postfix
-  import LocalPrefixSpan.ReversedPrefix
+  import CSP.Postfix
+  import LocalCSP.ReversedPrefix
 
   /**
    * Generates frequent patterns on the input array of postfixes.
@@ -77,7 +77,7 @@ private[fpm] class LocalPrefixSpan(
   }
 }
 
-private object LocalPrefixSpan {
+private object LocalCSP {
 
   /**
    * Represents a prefix stored as a list in reversed order.

@@ -59,11 +59,11 @@ import org.apache.spark.storage.StorageLevel
  * (Wikipedia)</a>
  */
 @Since("1.5.0")
-class PrefixSpan private (
+class CSP private (
     private var minSupport: Double,
     private var maxPatternLength: Int,
     private var maxLocalProjDBSize: Long) extends Logging with Serializable {
-  import PrefixSpan._
+  import CSP._
 
   /**
    * Constructs a default instance with default parameters
@@ -129,10 +129,10 @@ class PrefixSpan private (
   /**
    * Finds the complete set of frequent sequential patterns in the input sequences of itemsets.
    * @param data sequences of itemsets.
-   * @return a [[PrefixSpanModel]] that contains the frequent patterns
+   * @return a [[CSPModel]] that contains the frequent patterns
    */
   @Since("1.5.0")
-  def run[Item: ClassTag](data: RDD[Array[Array[Item]]]): PrefixSpanModel[Item] = {
+  def run[Item: ClassTag](data: RDD[Array[Array[Item]]]): CSPModel[Item] = {
     if (data.getStorageLevel == StorageLevel.NONE) {
       logWarning("Input data is not cached.")
     }
@@ -181,21 +181,21 @@ class PrefixSpan private (
     }
     dataInternalRepr.unpersist()
 
-    new PrefixSpanModel(freqSequences)
+    new CSPModel(freqSequences)
   }
 
   /**
    * A Java-friendly version of `run()` that reads sequences from a `JavaRDD` and returns
-   * frequent sequences in a [[PrefixSpanModel]].
+   * frequent sequences in a [[CSPModel]].
    * @param data ordered sequences of itemsets stored as Java Iterable of Iterables
    * @tparam Item item type
    * @tparam Itemset itemset type, which is an Iterable of Items
    * @tparam Sequence sequence type, which is an Iterable of Itemsets
-   * @return a [[PrefixSpanModel]] that contains the frequent sequential patterns
+   * @return a [[CSPModel]] that contains the frequent sequential patterns
    */
   @Since("1.5.0")
   def run[Item, Itemset <: jl.Iterable[Item], Sequence <: jl.Iterable[Itemset]](
-      data: JavaRDD[Sequence]): PrefixSpanModel[Item] = {
+      data: JavaRDD[Sequence]): CSPModel[Item] = {
     implicit val tag = fakeClassTag[Item]
     run(data.rdd.map(_.asScala.map(_.asScala.toArray).toArray))
   }
@@ -203,7 +203,7 @@ class PrefixSpan private (
 }
 
 @Since("1.5.0")
-object PrefixSpan extends Logging {
+object CSP extends Logging {
 
   /**
    * This methods finds all frequent items in a input dataset.
@@ -348,10 +348,10 @@ object PrefixSpan extends Logging {
         }.filter(_._2.nonEmpty)
       }.groupByKey().flatMap { case (id, projPostfixes) =>
         val prefix = bcSmallPrefixes.value(id)
-        val localPrefixSpan = new LocalPrefixSpan(minCount, maxPatternLength - prefix.length)
+        val localCSP = new LocalCSP(minCount, maxPatternLength - prefix.length)
         // TODO: We collect projected postfixes into memory. We should also compare the performance
         // TODO: of keeping them on shuffle files.
-        localPrefixSpan.run(projPostfixes.toArray).map { case (pattern, count) =>
+        localCSP.run(projPostfixes.toArray).map { case (pattern, count) =>
           (prefix.items ++ pattern, count)
         }
       }
@@ -601,13 +601,13 @@ object PrefixSpan extends Logging {
 }
 
 /**
- * Model fitted by [[PrefixSpan]]
+ * Model fitted by [[CSP]]
  * @param freqSequences frequent sequences
  * @tparam Item item type
  */
 @Since("1.5.0")
-class PrefixSpanModel[Item] @Since("1.5.0") (
-    @Since("1.5.0") val freqSequences: RDD[PrefixSpan.FreqSequence[Item]])
+class CSPModel[Item] @Since("1.5.0") (
+    @Since("1.5.0") val freqSequences: RDD[CSP.FreqSequence[Item]])
   extends Saveable with Serializable {
 
   /**
@@ -618,7 +618,7 @@ class PrefixSpanModel[Item] @Since("1.5.0") (
    *  - human-readable (JSON) model metadata to path/metadata/
    *  - Parquet formatted data to path/data/
    *
-   * The model may be loaded using `PrefixSpanModel.load`.
+   * The model may be loaded using `CSPModel.load`.
    *
    * @param sc  Spark context used to save model data.
    * @param path  Path specifying the directory in which to save this model.
@@ -626,25 +626,25 @@ class PrefixSpanModel[Item] @Since("1.5.0") (
    */
   @Since("2.0.0")
   override def save(sc: SparkContext, path: String): Unit = {
-    PrefixSpanModel.SaveLoadV1_0.save(this, path)
+    CSPModel.SaveLoadV1_0.save(this, path)
   }
 }
 
 @Since("2.0.0")
-object PrefixSpanModel extends Loader[PrefixSpanModel[_]] {
+object CSPModel extends Loader[CSPModel[_]] {
 
   @Since("2.0.0")
-  override def load(sc: SparkContext, path: String): PrefixSpanModel[_] = {
-    PrefixSpanModel.SaveLoadV1_0.load(sc, path)
+  override def load(sc: SparkContext, path: String): CSPModel[_] = {
+    CSPModel.SaveLoadV1_0.load(sc, path)
   }
 
   private[fpm] object SaveLoadV1_0 {
 
     private val thisFormatVersion = "1.0"
 
-    private val thisClassName = "org.apache.spark.mllib.fpm.PrefixSpanModel"
+    private val thisClassName = "org.apache.spark.mllib.fpm.CSPModel"
 
-    def save(model: PrefixSpanModel[_], path: String): Unit = {
+    def save(model: CSPModel[_], path: String): Unit = {
       val sc = model.freqSequences.sparkContext
       val spark = SparkSession.builder().sparkContext(sc).getOrCreate()
 
@@ -668,7 +668,7 @@ object PrefixSpanModel extends Loader[PrefixSpanModel[_]] {
       spark.createDataFrame(rowDataRDD, schema).write.parquet(Loader.dataPath(path))
     }
 
-    def load(sc: SparkContext, path: String): PrefixSpanModel[_] = {
+    def load(sc: SparkContext, path: String): CSPModel[_] = {
       implicit val formats = DefaultFormats
       val spark = SparkSession.builder().sparkContext(sc).getOrCreate()
 
@@ -681,13 +681,13 @@ object PrefixSpanModel extends Loader[PrefixSpanModel[_]] {
       loadImpl(freqSequences, sample)
     }
 
-    def loadImpl[Item: ClassTag](freqSequences: DataFrame, sample: Item): PrefixSpanModel[Item] = {
+    def loadImpl[Item: ClassTag](freqSequences: DataFrame, sample: Item): CSPModel[Item] = {
       val freqSequencesRDD = freqSequences.select("sequence", "freq").rdd.map { x =>
         val sequence = x.getSeq[scala.collection.Seq[Item]](0).map(_.toArray).toArray
         val freq = x.getLong(1)
-        new PrefixSpan.FreqSequence(sequence, freq)
+        new CSP.FreqSequence(sequence, freq)
       }
-      new PrefixSpanModel(freqSequencesRDD)
+      new CSPModel(freqSequencesRDD)
     }
   }
 }
