@@ -34,9 +34,9 @@ public class JavaCSPSuite extends SharedSparkSession {
   @Test
   public void runCSP() {
     JavaRDD<List<List<Integer>>> sequencesN = jsc.parallelize(Arrays.asList(
-      Arrays.asList(Arrays.asList(1, 2), Arrays.asList(3)),
-      Arrays.asList(Arrays.asList(1), Arrays.asList(2, 3), Arrays.asList(1, 2)),
-      Arrays.asList(Arrays.asList(1, 2), Arrays.asList(5)),
+      Arrays.asList(Arrays.asList(1, 2), Arrays.asList(3, 6)),
+      Arrays.asList(Arrays.asList(1), Arrays.asList(2, 3), Arrays.asList(1, 2), Arrays.asList(6)),
+      Arrays.asList(Arrays.asList(1, 2), Arrays.asList(5, 6)),
       Arrays.asList(Arrays.asList(6))
     ), 2);
     JavaRDD<List<List<Integer>>> sequencesA = jsc.parallelize(Arrays.asList(
@@ -46,20 +46,20 @@ public class JavaCSPSuite extends SharedSparkSession {
             Arrays.asList(Arrays.asList(1, 2, 6))
     ), 2);
     CSP csp = new CSP()
-      .setMinGR(1.0)
+      .setMinGR(1.3)
       .setMinSupport(0.3)
       .setMaxPatternLength(5);
     CSPModel<Integer> model = csp.run(sequencesN, sequencesA);
     JavaRDD<FreqSequence<Integer>> freqSeqs = model.freqSequences().toJavaRDD();
     List<FreqSequence<Integer>> localFreqSeqs = freqSeqs.collect();
-//    Assert.assertEquals(5, localFreqSeqs.size());
+    Assert.assertEquals(20, localFreqSeqs.size());
     // Check that each frequent sequence could be materialized.
     for (CSP.FreqSequence<Integer> freqSeq : localFreqSeqs) {
       List<List<Integer>> seq = freqSeq.javaSequence();
-      Double gR = (Double) freqSeq.growthRate();
+      double gR = freqSeq.growthRate();
       long countA = freqSeq.freqA();
       long countN = freqSeq.freqN();
-      System.out.println("Seq: " + seq.toString() + " Growth Rate: " + gR + " CountA: " + countA + " CountN: " + countN);
+//      System.out.println("Seq: " + seq.toString() + " Growth Rate: " + gR + " CountA: " + countA + " CountN: " + countN);
     }
   }
 
