@@ -27,6 +27,7 @@ private[python] class CSPModelWrapper(model: CSPModel[Any])
   extends CSPModel(model.freqSequences) {
 
   def getFreqSequences: RDD[Array[Any]] = {
-    SerDe.fromTuple2RDD(model.freqSequences.map(x => (x.javaSequence, x.freq)))
+    SerDe.fromTuple4RDD(model.freqSequences.map(x =>
+      (x.javaSequence, x.growthRate, x.freqA, x.freqN)))
   }
 }

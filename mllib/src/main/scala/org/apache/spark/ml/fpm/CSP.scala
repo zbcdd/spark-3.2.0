@@ -133,19 +133,25 @@ final class CSP(@Since("2.4.0") override val uid: String) extends Params {
    *          - `freq: Long`
    */
   @Since("2.4.0")
-  def findFrequentSequentialPatterns(dataset: Dataset[_]): DataFrame = instrumented { instr =>
-    instr.logDataset(dataset)
+  def findFrequentSequentialPatterns(datasetN: Dataset[_],
+                                     datasetA: Dataset[_]): DataFrame = instrumented { instr =>
+    instr.logDataset(datasetN)
+    instr.logDataset(datasetA)
+    instr.logParams(this, params: _*)
     instr.logParams(this, params: _*)
 
     val sequenceColParam = $(sequenceCol)
-    val inputType = dataset.schema(sequenceColParam).dataType
+    val inputType = datasetN.schema(sequenceColParam).dataType
     require(inputType.isInstanceOf[ArrayType] &&
       inputType.asInstanceOf[ArrayType].elementType.isInstanceOf[ArrayType],
       s"The input column must be ArrayType and the array element type must also be ArrayType, " +
       s"but got $inputType.")
 
-    val data = dataset.select(sequenceColParam)
-    val sequences = data.where(col(sequenceColParam).isNotNull).rdd
+    val dataN = datasetN.select(sequenceColParam)
+    val dataA = datasetA.select(sequenceColParam)
+    val sequencesN = dataN.where(col(sequenceColParam).isNotNull).rdd
+      .map(r => r.getSeq[scala.collection.Seq[Any]](0).map(_.toArray).toArray)
+    val sequencesA = dataA.where(col(sequenceColParam).isNotNull).rdd
       .map(r => r.getSeq[scala.collection.Seq[Any]](0).map(_.toArray).toArray)
 
     val mllibCSP = new mllibCSP()
@@ -153,11 +159,12 @@ final class CSP(@Since("2.4.0") override val uid: String) extends Params {
       .setMaxPatternLength($(maxPatternLength))
       .setMaxLocalProjDBSize($(maxLocalProjDBSize))
 
-    val rows = mllibCSP.run(sequences).freqSequences.map(f => Row(f.sequence, f.freq))
+    val rows = mllibCSP.run(sequencesN, sequencesA).freqSequences.map(f =>
+      Row(f.sequence, f.growthRate, f.freqA, f.freqN))
     val schema = StructType(Seq(
-      StructField("sequence", dataset.schema(sequenceColParam).dataType, nullable = false),
+      StructField("sequence", datasetN.schema(sequenceColParam).dataType, nullable = false),
       StructField("freq", LongType, nullable = false)))
-    val freqSequences = dataset.sparkSession.createDataFrame(rows, schema)
+    val freqSequences = datasetN.sparkSession.createDataFrame(rows, schema)
 
     freqSequences
   }

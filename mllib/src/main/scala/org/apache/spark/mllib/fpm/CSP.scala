@@ -33,7 +33,9 @@ import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Since
 import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.api.java.JavaSparkContext.fakeClassTag
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
+import org.apache.spark.mllib.fpm.CSP.Prefix.{cachePrefix, findCachedId}
 import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
@@ -49,6 +51,7 @@ import org.apache.spark.storage.StorageLevel
  *
  * @param minSupport the minimal support level of the sequential pattern, any pattern that appears
  *                   more than (minSupport * size-of-the-dataset) times will be output
+ *                   注：minSupport只针对异常数据库。
  * @param maxPatternLength the maximal length of the sequential pattern
  * @param maxLocalProjDBSize The maximum number of items (including delimiters used in the internal
  *                           storage format) allowed in a projected database before local
@@ -60,6 +63,7 @@ import org.apache.spark.storage.StorageLevel
  */
 @Since("1.5.0")
 class CSP private (
+    private var minGR: Double,
     private var minSupport: Double,
     private var maxPatternLength: Int,
     private var maxLocalProjDBSize: Long) extends Logging with Serializable {
@@ -70,7 +74,18 @@ class CSP private (
    * {minSupport: `0.1`, maxPatternLength: `10`, maxLocalProjDBSize: `32000000L`}.
    */
   @Since("1.5.0")
-  def this() = this(0.1, 10, 32000000L)
+  def this() = this(2.0, 0.1, 10, 32000000L)
+
+
+  @Since("1.5.0")
+  def getMinGR: Double = minGR
+
+
+  @Since("1.5.0")
+  def setMinGR(minGR: Double): this.type = {
+    this.minGR = minGR
+    this
+  }
 
   /**
    * Get the minimal support (i.e. the frequency of occurrence before a pattern is considered
@@ -128,30 +143,43 @@ class CSP private (
 
   /**
    * Finds the complete set of frequent sequential patterns in the input sequences of itemsets.
-   * @param data sequences of itemsets.
+   * @param dataN sequences of itemsets (Normal).
+   * @param dataA sequences of itemsets (Anomaly).
    * @return a [[CSPModel]] that contains the frequent patterns
    */
   @Since("1.5.0")
-  def run[Item: ClassTag](data: RDD[Array[Array[Item]]]): CSPModel[Item] = {
-    if (data.getStorageLevel == StorageLevel.NONE) {
-      logWarning("Input data is not cached.")
+  def run[Item: ClassTag](
+      dataN: RDD[Array[Array[Item]]],
+      dataA: RDD[Array[Array[Item]]]): CSPModel[Item] = {
+    if (dataN.getStorageLevel == StorageLevel.NONE) {
+      logWarning("Input data (normal) is not cached.")
+    }
+    if (dataA.getStorageLevel == StorageLevel.NONE) {
+      logWarning("Input data (anomaly) is not cached.")
     }
 
-    val totalCount = data.count()
-    logInfo(s"number of sequences: $totalCount")
-    val minCount = math.ceil(minSupport * totalCount).toLong
-    logInfo(s"minimum count for a frequent pattern: $minCount")
+    val totalCountN = dataN.count()
+    val totalCountA = dataA.count()
+    logInfo(s"number of normal sequences: $totalCountN, number of anomaly sequences: $totalCountA")
+    val minCount = math.ceil(minSupport * totalCountA).toLong
+    logInfo(s"minimum count for a frequent pattern (only pay attention to anomaly): $minCount")
 
-    // Find frequent items.
-    val freqItems = findFrequentItems(data, minCount)
+    // Find frequent items (only pay attention to anomaly database).
+    val freqItems = findFrequentItems(dataA, minCount)
     logInfo(s"number of frequent items: ${freqItems.length}")
 
     // Keep only frequent items from input sequences and convert them to internal storage.
     val itemToInt = freqItems.zipWithIndex.toMap
-    val dataInternalRepr = toDatabaseInternalRepr(data, itemToInt)
+    val dataInternalReprN = toDatabaseInternalRepr(dataN, itemToInt)
+      .persist(StorageLevel.MEMORY_AND_DISK)
+    val dataInternalReprA = toDatabaseInternalRepr(dataA, itemToInt)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    val results = genFreqPatterns(dataInternalRepr, minCount, maxPatternLength, maxLocalProjDBSize)
+    val results = genFreqPatterns(
+      dataInternalReprN, dataInternalReprA,
+      totalCountN, totalCountA,
+      minGR, minCount,
+      maxPatternLength, maxLocalProjDBSize)
 
     def toPublicRepr(pattern: Array[Int]): Array[Array[Item]] = {
       val sequenceBuilder = mutable.ArrayBuilder.make[Array[Item]]
@@ -171,15 +199,17 @@ class CSP private (
       sequenceBuilder.result()
     }
 
-    val freqSequences = results.map { case (seq: Array[Int], count: Long) =>
-      new FreqSequence(toPublicRepr(seq), count)
+    val freqSequences = results.map {
+      case (seq: Array[Int], growthRate: Double, countA: Long, countN: Long) =>
+        new FreqSequence(toPublicRepr(seq), growthRate, countA, countN)
     }
     // Cache the final RDD to the same storage level as input
-    if (data.getStorageLevel != StorageLevel.NONE) {
-      freqSequences.persist(data.getStorageLevel)
+    if (dataN.getStorageLevel != StorageLevel.NONE) {
+      freqSequences.persist(dataN.getStorageLevel)
       freqSequences.count()
     }
-    dataInternalRepr.unpersist()
+    dataInternalReprN.unpersist()
+    dataInternalReprA.unpersist()
 
     new CSPModel(freqSequences)
   }
@@ -195,9 +225,10 @@ class CSP private (
    */
   @Since("1.5.0")
   def run[Item, Itemset <: jl.Iterable[Item], Sequence <: jl.Iterable[Itemset]](
-      data: JavaRDD[Sequence]): CSPModel[Item] = {
+      dataN: JavaRDD[Sequence], dataA: JavaRDD[Sequence]): CSPModel[Item] = {
     implicit val tag = fakeClassTag[Item]
-    run(data.rdd.map(_.asScala.map(_.asScala.toArray).toArray))
+    run(dataN.rdd.map(_.asScala.map(_.asScala.toArray).toArray),
+      dataA.rdd.map(_.asScala.map(_.asScala.toArray).toArray))
   }
 
 }
@@ -266,35 +297,22 @@ object CSP extends Logging {
     }
   }
 
-  /**
-   * Find the complete set of frequent sequential patterns in the input sequences.
-   * @param data ordered sequences of itemsets. We represent a sequence internally as Array[Int],
-   *             where each itemset is represented by a contiguous sequence of distinct and ordered
-   *             positive integers. We use 0 as the delimiter at itemset boundaries, including the
-   *             first and the last position.
-   * @return an RDD of (frequent sequential pattern, count) pairs,
-   * @see [[Postfix]]
-   */
-  private[fpm] def genFreqPatterns(
-      data: RDD[Array[Int]],
-      minCount: Long,
-      maxPatternLength: Int,
-      maxLocalProjDBSize: Long): RDD[(Array[Int], Long)] = {
-    val sc = data.sparkContext
-
-    if (data.getStorageLevel == StorageLevel.NONE) {
-      logWarning("Input data is not cached.")
-    }
-
-    val postfixes = data.map(items => new Postfix(items))
+  private[fpm] def splitLarge(
+     postfixes: RDD[Postfix],
+     emptyPrefix: Prefix,
+     minCount: Long,
+     maxPatternLength: Int,
+     maxLocalProjDBSize: Long): (mutable.ArrayBuffer[(Array[Int], Long)],
+                                 mutable.Map[Int, Prefix]) = {
 
     // Local frequent patterns (prefixes) and their counts.
     val localFreqPatterns = mutable.ArrayBuffer.empty[(Array[Int], Long)]
-    // Prefixes whose projected databases are small.
-    val smallPrefixes = mutable.Map.empty[Int, Prefix]
-    val emptyPrefix = Prefix.empty
+
     // Prefixes whose projected databases are large.
     var largePrefixes = mutable.Map(emptyPrefix.id -> emptyPrefix)
+    // Prefixes whose projected databases are small.
+    val smallPrefixes = mutable.Map.empty[Int, Prefix]
+
     while (largePrefixes.nonEmpty) {
       val numLocalFreqPatterns = localFreqPatterns.length
       logInfo(s"number of local frequent patterns: $numLocalFreqPatterns")
@@ -311,14 +329,14 @@ object CSP extends Logging {
       logInfo(s"number of large prefixes: ${largePrefixes.size}")
       val largePrefixArray = largePrefixes.values.toArray
       val freqPrefixes = postfixes.flatMap { postfix =>
-          largePrefixArray.flatMap { prefix =>
-            postfix.project(prefix).genPrefixItems.map { case (item, postfixSize) =>
-              ((prefix.id, item), (1L, postfixSize))
-            }
+        largePrefixArray.flatMap { prefix =>
+          postfix.project(prefix).genPrefixItems.map { case (item, postfixSize) =>
+            ((prefix.id, item), (1L, postfixSize))
           }
-        }.reduceByKey { (cs0, cs1) =>
-          (cs0._1 + cs1._1, cs0._2 + cs1._2)
-        }.filter { case (_, cs) => cs._1 >= minCount }
+        }
+      }.reduceByKey { (cs0, cs1) =>
+        (cs0._1 + cs1._1, cs0._2 + cs1._2)
+      }.filter { case (_, cs) => cs._1 >= minCount }
         .collect()
       val newLargePrefixes = mutable.Map.empty[Int, Prefix]
       freqPrefixes.foreach { case ((id, item), (count, projDBSize)) =>
@@ -335,31 +353,99 @@ object CSP extends Logging {
       largePrefixes = newLargePrefixes
     }
 
-    var freqPatterns = sc.parallelize(localFreqPatterns.toSeq, 1)
+    (localFreqPatterns, smallPrefixes)
+  }
 
-    val numSmallPrefixes = smallPrefixes.size
-    logInfo(s"number of small prefixes for local processing: $numSmallPrefixes")
+
+  private[fpm] def genProjPostfixes(
+    sc: SparkContext,
+    bcSmallPrefixes: Broadcast[mutable.Map[Int, Prefix]],
+    postfixes: RDD[Postfix]): RDD[(Int, Iterable[Postfix])] = {
+    val numSmallPrefixes = bcSmallPrefixes.value.size
+    logInfo(s"number of small prefixes for local processing(anomaly): $numSmallPrefixes")
+
+    var PrefixIdToProjPostfixes = sc.emptyRDD[(Int, Iterable[Postfix])]
     if (numSmallPrefixes > 0) {
-      // Switch to local processing.
-      val bcSmallPrefixes = sc.broadcast(smallPrefixes)
-      val distributedFreqPattern = postfixes.flatMap { postfix =>
+      PrefixIdToProjPostfixes = postfixes.flatMap { postfix =>
         bcSmallPrefixes.value.values.map { prefix =>
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
-      }.groupByKey().flatMap { case (id, projPostfixes) =>
-        val prefix = bcSmallPrefixes.value(id)
-        val localCSP = new LocalCSP(minCount, maxPatternLength - prefix.length)
-        // TODO: We collect projected postfixes into memory. We should also compare the performance
-        // TODO: of keeping them on shuffle files.
-        localCSP.run(projPostfixes.toArray).map { case (pattern, count) =>
-          (prefix.items ++ pattern, count)
-        }
-      }
-      // Union local frequent patterns and distributed ones.
-      freqPatterns = freqPatterns ++ distributedFreqPattern
+      }.groupByKey()
+    }
+    PrefixIdToProjPostfixes
+  }
+
+  /**
+   * Find the complete set of frequent sequential patterns in the input sequences.
+   * @param dataN ordered sequences of itemsets. We represent a sequence internally as Array[Int],
+   *             where each itemset is represented by a contiguous sequence of distinct and ordered
+   *             positive integers. We use 0 as the delimiter at itemset boundaries, including the
+   *             first and the last position.
+   * @param dataA ordered sequences of itemsets (anomaly).
+   * @param totalCountN |D_normal|
+   * @param totalCountA |D_anomaly|
+   * @return an RDD of (frequent sequential pattern, count) pairs,
+   * @see [[Postfix]]
+   */
+  private[fpm] def genFreqPatterns(
+      dataN: RDD[Array[Int]],
+      dataA: RDD[Array[Int]],
+      totalCountN: Long,
+      totalCountA: Long,
+      minGR: Double,
+      minCount: Long,
+      maxPatternLength: Int,
+      maxLocalProjDBSize: Long): RDD[(Array[Int], Double, Long, Long)] = {
+    val sc = dataN.sparkContext
+
+    val DN = totalCountN.asInstanceOf[Double]
+    val DA = totalCountA.asInstanceOf[Double]
+
+    if (dataN.getStorageLevel == StorageLevel.NONE || dataA.getStorageLevel == StorageLevel.NONE) {
+      logWarning("Input data is not cached.")
     }
 
-    freqPatterns
+    val postfixesN = dataN.map(items => new Postfix(items))
+    val (localFreqPatternsN, smallPrefixesN) = splitLarge(postfixesN,
+                                                Prefix.emptyN,
+                                                0,  // normal数据不做filter（否则所有小于minCount的countN都会变为0）
+                                                maxPatternLength,
+                                                maxLocalProjDBSize)
+    val postfixesA = dataA.map(items => new Postfix(items))
+    val (localFreqPatternsA, smallPrefixesA) = splitLarge(postfixesA,
+                                                Prefix.emptyA,
+                                                minCount,
+                                                maxPatternLength,
+                                                maxLocalProjDBSize)
+
+    val normalFreqPatterns = localFreqPatternsN.map(cs => (cs._1.mkString(","), cs._2)).toMap
+    var localCSP = sc.parallelize(localFreqPatternsA.map {
+      case (freqPatternA, countA) =>
+        val freqPatternAStr = freqPatternA.mkString(",")
+        val countN = normalFreqPatterns.getOrElse(freqPatternAStr, 0L)
+        (freqPatternA,
+          (countA.asInstanceOf[Double] / DA) / (countN.asInstanceOf[Double] / DN),
+          countA, countN)
+    }.filter(_._2 >= minGR).toSeq, 1)
+
+    val bcSmallPrefixesA = sc.broadcast(smallPrefixesA)
+    val PrefixIdToProjPostfixesA = genProjPostfixes(sc, bcSmallPrefixesA, postfixesA)
+    val bcSmallPrefixesN = sc.broadcast(smallPrefixesN)
+    val PrefixIdToProjPostfixesN = genProjPostfixes(sc, bcSmallPrefixesN, postfixesN)
+
+    val distributedCSP = PrefixIdToProjPostfixesA.leftOuterJoin(PrefixIdToProjPostfixesN).flatMap {
+      case (id, (projPostfixesA, projPostfixesN)) =>
+        val prefix = bcSmallPrefixesA.value(id)
+        val localCSP = new LocalCSP(DN, DA, minGR, minCount, maxPatternLength - prefix.length)
+        localCSP.run(projPostfixesA.toArray,
+          projPostfixesN.getOrElse(Iterable.empty[Postfix]).toArray).map {
+          case (csp, growthRate, countA, countN) =>
+            (prefix.items ++ csp, growthRate, countA, countN)
+        }
+    }
+
+    localCSP = localCSP ++ distributedCSP
+    localCSP
   }
 
   /**
@@ -370,7 +456,11 @@ object CSP extends Logging {
   private[fpm] class Prefix private (val items: Array[Int], val length: Int) extends Serializable {
 
     /** A unique id for this prefix. */
-    val id: Int = Prefix.nextId
+    var id: Int = findCachedId(items.mkString(","))
+    if (id == -1) {
+      id = Prefix.nextId
+      cachePrefix(items.mkString(","), id)
+    }
 
     /** Expands this prefix by the input item. */
     def :+(item: Int): Prefix = {
@@ -386,12 +476,21 @@ object CSP extends Logging {
   private[fpm] object Prefix {
     /** Internal counter to generate unique IDs. */
     private val counter: AtomicInteger = new AtomicInteger(-1)
+    private val prefixCache: mutable.HashMap[String, Int] = mutable.HashMap.empty[String, Int]
 
     /** Gets the next unique ID. */
     private def nextId: Int = counter.incrementAndGet()
 
+    private def findCachedId(prefixStr: String): Int = prefixCache.getOrElse(prefixStr, -1)
+
+    private def cachePrefix(prefixStr: String, id: Int): this.type = {
+      prefixCache += prefixStr -> id
+      this
+    }
+
     /** An empty [[Prefix]] instance. */
-    val empty: Prefix = new Prefix(Array.empty, 0)
+    val emptyA: Prefix = new Prefix(Array.empty, 0)
+    val emptyN: Prefix = new Prefix(Array.empty, 0)
   }
 
   /**
@@ -591,7 +690,9 @@ object CSP extends Logging {
   @Since("1.5.0")
   class FreqSequence[Item] @Since("1.5.0") (
       @Since("1.5.0") val sequence: Array[Array[Item]],
-      @Since("1.5.0") val freq: Long) extends Serializable {
+      @Since("1.5.0") val growthRate: Double,
+      @Since("1.5.0") val freqA: Long,
+      @Since("1.5.0") val freqN: Long) extends Serializable {
     /**
      * Returns sequence as a Java List of lists for Java users.
      */
@@ -663,7 +764,7 @@ object CSPModel extends Loader[CSPModel[_]] {
         StructField("freq", LongType))
       val schema = StructType(fields)
       val rowDataRDD = model.freqSequences.map { x =>
-        Row(x.sequence, x.freq)
+        Row(x.sequence, x.growthRate, x.freqA, x.freqN)
       }
       spark.createDataFrame(rowDataRDD, schema).write.parquet(Loader.dataPath(path))
     }
@@ -684,8 +785,10 @@ object CSPModel extends Loader[CSPModel[_]] {
     def loadImpl[Item: ClassTag](freqSequences: DataFrame, sample: Item): CSPModel[Item] = {
       val freqSequencesRDD = freqSequences.select("sequence", "freq").rdd.map { x =>
         val sequence = x.getSeq[scala.collection.Seq[Item]](0).map(_.toArray).toArray
-        val freq = x.getLong(1)
-        new CSP.FreqSequence(sequence, freq)
+        val growthRate = x.getDouble(1)
+        val freqA = x.getLong(2)
+        val freqN = x.getLong(3)
+        new CSP.FreqSequence(sequence, growthRate, freqA, freqN)
       }
       new CSPModel(freqSequencesRDD)
     }

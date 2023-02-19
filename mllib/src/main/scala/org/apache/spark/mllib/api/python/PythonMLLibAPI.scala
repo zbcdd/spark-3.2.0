@@ -579,7 +579,8 @@ private[python] class PythonMLLibAPI extends Serializable {
    * the Py4J documentation.
    */
   def trainCSPModel(
-      data: JavaRDD[java.util.ArrayList[java.util.ArrayList[Any]]],
+      dataN: JavaRDD[java.util.ArrayList[java.util.ArrayList[Any]]],
+      dataA: JavaRDD[java.util.ArrayList[java.util.ArrayList[Any]]],
       minSupport: Double,
       maxPatternLength: Int,
       localProjDBSize: Int ): CSPModelWrapper = {
@@ -588,8 +589,9 @@ private[python] class PythonMLLibAPI extends Serializable {
       .setMaxPatternLength(maxPatternLength)
       .setMaxLocalProjDBSize(localProjDBSize)
 
-    val trainData = data.rdd.map(_.asScala.toArray.map(_.asScala.toArray))
-    val model = csp.run(trainData)
+    val trainDataN = dataN.rdd.map(_.asScala.toArray.map(_.asScala.toArray))
+    val trainDataA = dataA.rdd.map(_.asScala.toArray.map(_.asScala.toArray))
+    val model = csp.run(trainDataN, trainDataA)
     new CSPModelWrapper(model)
   }
 
@@ -1332,6 +1334,10 @@ private[spark] abstract class SerDeBase {
   /* convert RDD[Tuple2[,]] to RDD[Array[Any]] */
   def fromTuple2RDD(rdd: RDD[(Any, Any)]): RDD[Array[Any]] = {
     rdd.map(x => Array(x._1, x._2))
+  }
+
+  def fromTuple4RDD(rdd: RDD[(Any, Any, Any, Any)]): RDD[Array[Any]] = {
+    rdd.map(x => Array(x._1, x._2, x._3, x._4))
   }
 
   /**

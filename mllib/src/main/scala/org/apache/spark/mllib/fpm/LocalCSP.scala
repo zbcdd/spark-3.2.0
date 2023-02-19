@@ -28,6 +28,9 @@ import org.apache.spark.internal.Logging
  * @param maxPatternLength max pattern length for a frequent pattern
  */
 private[fpm] class LocalCSP(
+    val DN: Double,
+    val DA: Double,
+    val minGR: Double,
     val minCount: Long,
     val maxPatternLength: Int) extends Logging with Serializable {
   import CSP.Postfix
@@ -38,10 +41,25 @@ private[fpm] class LocalCSP(
    * @param postfixes an array of postfixes
    * @return an iterator of (frequent pattern, count)
    */
-  def run(postfixes: Array[Postfix]): Iterator[(Array[Int], Long)] = {
-    genFreqPatterns(ReversedPrefix.empty, postfixes).map { case (prefix, count) =>
-      (prefix.toSequence, count)
+  def run(postfixesA: Array[Postfix],
+          postfixesN: Array[Postfix]): Iterator[(Array[Int], Double, Long, Long)] = {
+    genFreqPatterns(ReversedPrefix.empty,
+                    postfixesA,
+                    postfixesN).map {
+      case (prefix, growthRate, countA, countN) =>
+        (prefix.toSequence, growthRate, countA, countN)
     }
+  }
+
+
+  private def counts(postfixes: Array[Postfix]): mutable.Map[Int, Long] = {
+    val counts = mutable.Map.empty[Int, Long].withDefaultValue(0)
+    postfixes.foreach { postfix =>
+      postfix.genPrefixItems.foreach { case (x, _) =>
+        counts(x) += 1L
+      }
+    }
+    counts
   }
 
   /**
@@ -52,26 +70,30 @@ private[fpm] class LocalCSP(
    */
   private def genFreqPatterns(
       prefix: ReversedPrefix,
-      postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
-    if (maxPatternLength == prefix.length || postfixes.length < minCount) {
+      postfixesA: Array[Postfix],
+      postfixesN: Array[Postfix]): Iterator[(ReversedPrefix, Double, Long, Long)] = {
+    if (maxPatternLength == prefix.length || postfixesA.length < minCount) {
       return Iterator.empty
     }
     // find frequent items
-    val counts = mutable.Map.empty[Int, Long].withDefaultValue(0)
-    postfixes.foreach { postfix =>
-      postfix.genPrefixItems.foreach { case (x, _) =>
-        counts(x) += 1L
-      }
-    }
-    val freqItems = counts.toSeq.filter { case (_, count) =>
+    val countsA = counts(postfixesA)
+    val countsN = counts(postfixesN)
+    val freqItems = countsA.toSeq.filter { case (_, count) =>
       count >= minCount
     }.sorted
     // project and recursively call genFreqPatterns
     freqItems.toIterator.flatMap { case (item, count) =>
       val newPrefix = prefix :+ item
-      Iterator.single((newPrefix, count)) ++ {
-        val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
-        genFreqPatterns(newPrefix, projected)
+      val countA = countsA(item)
+      val countN = countsN(item)
+      val GR = (countA.asInstanceOf[Double] / DA) / (countN.asInstanceOf[Double] / DN)
+      val projectedA = postfixesA.map(_.project(item)).filter(_.nonEmpty)
+      val projectedN = postfixesN.map(_.project(item)).filter(_.nonEmpty)
+      val csps = genFreqPatterns(newPrefix, projectedA, projectedN)
+      if (GR >= minGR) {
+        Iterator.single((newPrefix, GR, countA, countN)) ++ csps
+      } else {
+        csps
       }
     }
   }
