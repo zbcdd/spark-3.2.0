@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.ml.fpm
 
 import org.apache.spark.annotation.Since
@@ -166,4 +166,3 @@ final class PrefixSpan(@Since("2.4.0") override val uid: String) extends Params 
   override def copy(extra: ParamMap): PrefixSpan = defaultCopy(extra)
 
 }
-*/

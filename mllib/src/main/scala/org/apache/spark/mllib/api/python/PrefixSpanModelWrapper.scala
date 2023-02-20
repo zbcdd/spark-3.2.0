@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.mllib.api.python
 
 import org.apache.spark.mllib.fpm.PrefixSpanModel
@@ -30,4 +30,3 @@ private[python] class PrefixSpanModelWrapper(model: PrefixSpanModel[Any])
     SerDe.fromTuple2RDD(model.freqSequences.map(x => (x.javaSequence, x.freq)))
   }
 }
-*/

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.ml.fpm
 
 import org.apache.spark.ml.util.MLTest
@@ -145,4 +145,4 @@ class PrefixSpanSuite extends MLTest {
     assert(expectedSet === actualSet)
   }
 }
-*/
+

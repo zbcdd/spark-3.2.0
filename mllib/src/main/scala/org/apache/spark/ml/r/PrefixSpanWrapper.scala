@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
+
 package org.apache.spark.ml.r
 
 import org.apache.spark.ml.fpm.PrefixSpan
@@ -32,4 +32,3 @@ private[r] object PrefixSpanWrapper {
       .setSequenceCol(sequenceCol)
   }
 }
-*/
